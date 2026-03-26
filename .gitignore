@@ -1,0 +1,9 @@
+__pycache__/
+*.pyc
+.data_cache/
+checkpoints/
+checkpoints_test/
+wandb/
+logs/
+*.png
+.claude/

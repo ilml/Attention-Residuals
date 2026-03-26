@@ -1,0 +1,8 @@
+torch>=2.1.0
+tiktoken
+wandb
+pandas
+pyarrow
+numpy
+scipy
+matplotlib
