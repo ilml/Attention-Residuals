@@ -1,109 +1,90 @@
 """
-Data loading for the Nemotron-Pretraining-Dataset-sample.
-Loads parquet files, tokenizes with tiktoken GPT-2, packs into fixed-length sequences.
+Data loading for Attention Residuals experiments.
+Supports two modes:
+  1. Small sample: loads parquets, tokenizes on the fly (for quick tests)
+  2. Large binary: loads pre-tokenized mmap files from prepare_data.py (for real runs)
 """
 
 import os
+import json
 import glob
 import numpy as np
-import tiktoken
 import torch
 from torch.utils.data import Dataset, DataLoader, DistributedSampler
 
-DATA_DIR = "/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_llm/users/tolong/data/Nemotron-Pretraining-Dataset-sample"
 VOCAB_SIZE = 50257  # GPT-2
 SEQ_LEN = 8192
 
-
-def load_texts(data_dir: str = DATA_DIR) -> list[str]:
-    """Load all text from parquet files in the dataset directory."""
-    import pandas as pd
-
-    texts = []
-    parquet_files = sorted(glob.glob(os.path.join(data_dir, "*/*.parquet")))
-    for pf in parquet_files:
-        try:
-            df = pd.read_parquet(pf)
-        except Exception as e:
-            print(f"Warning: skipping {pf}: {e}")
-            continue
-        if "text" in df.columns:
-            texts.extend(df["text"].dropna().tolist())
-        else:
-            print(f"Skipping {pf} (no 'text' column, has: {list(df.columns)})")
-    print(f"Loaded {len(texts)} documents from {len(parquet_files)} parquet files")
-    return texts
+# Default paths
+SAMPLE_DATA_DIR = "/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_llm/users/tolong/data/Nemotron-Pretraining-Dataset-sample"
+LARGE_DATA_DIR = "/lustre/fsw/portfolios/coreai/users/tolong/data/nemotron_tokenized"
 
 
-def tokenize_and_pack(
-    texts: list[str],
-    seq_len: int = SEQ_LEN,
-    val_fraction: float = 0.05,
-    cache_dir: str | None = None,
-) -> tuple[np.ndarray, np.ndarray]:
-    """
-    Tokenize all texts and pack into fixed-length sequences.
-    Returns (train_tokens, val_tokens) as 2D numpy arrays of shape [N, seq_len].
-    """
-    # Check for cached tokenized data
-    if cache_dir is None:
-        cache_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".data_cache")
-    os.makedirs(cache_dir, exist_ok=True)
-    cache_file = os.path.join(cache_dir, f"tokens_seqlen{seq_len}.npz")
+class MmapTokenDataset(Dataset):
+    """Memory-mapped dataset for pre-tokenized binary data."""
 
-    if os.path.exists(cache_file):
-        print(f"Loading cached tokenized data from {cache_file}")
-        data = np.load(cache_file)
-        return data["train"], data["val"]
+    def __init__(self, bin_path: str, n_seqs: int, seq_len: int):
+        self.data = np.memmap(bin_path, dtype=np.int32, mode="r", shape=(n_seqs, seq_len))
+        self.n_seqs = n_seqs
 
-    enc = tiktoken.get_encoding("gpt2")
-    eot = enc.eot_token  # <|endoftext|> separator
+    def __len__(self):
+        return self.n_seqs
 
-    # Tokenize all documents
-    print("Tokenizing documents...")
-    all_tokens = []
-    for i, text in enumerate(texts):
-        tokens = enc.encode_ordinary(text)
-        all_tokens.extend(tokens)
-        all_tokens.append(eot)
-        if (i + 1) % 5000 == 0:
-            print(f"  Tokenized {i+1}/{len(texts)} docs, {len(all_tokens)} tokens so far")
-
-    total = len(all_tokens)
-    print(f"Total tokens: {total:,}")
-
-    # Pack into sequences of seq_len
-    n_seqs = total // seq_len
-    packed = np.array(all_tokens[: n_seqs * seq_len], dtype=np.int32).reshape(n_seqs, seq_len)
-    print(f"Packed into {n_seqs} sequences of length {seq_len}")
-
-    # Split train / val
-    n_val = max(1, int(n_seqs * val_fraction))
-    n_train = n_seqs - n_val
-    # Deterministic split: last n_val sequences are validation
-    train = packed[:n_train]
-    val = packed[n_train:]
-
-    print(f"Train: {n_train} seqs ({n_train * seq_len:,} tokens)")
-    print(f"Val:   {n_val} seqs ({n_val * seq_len:,} tokens)")
-
-    np.savez(cache_file, train=train, val=val)
-    print(f"Saved cache to {cache_file}")
-    return train, val
+    def __getitem__(self, idx):
+        tokens = torch.from_numpy(self.data[idx].astype(np.int64))
+        return tokens[:-1], tokens[1:]
 
 
-class TokenDataset(Dataset):
-    """Simple dataset that wraps packed token sequences."""
+class InMemoryTokenDataset(Dataset):
+    """In-memory dataset for small data (original sample)."""
+
     def __init__(self, data: np.ndarray):
-        self.data = data  # [N, seq_len]
+        self.data = data
 
     def __len__(self):
         return len(self.data)
 
     def __getitem__(self, idx):
         tokens = torch.from_numpy(self.data[idx].astype(np.int64))
-        # For language modeling: input = tokens[:-1], target = tokens[1:]
         return tokens[:-1], tokens[1:]
+
+
+def _load_sample_data(seq_len: int):
+    """Load the small sample dataset (tokenize on the fly with caching)."""
+    import tiktoken
+    import pandas as pd
+
+    cache_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".data_cache")
+    os.makedirs(cache_dir, exist_ok=True)
+    cache_file = os.path.join(cache_dir, f"tokens_seqlen{seq_len}.npz")
+
+    if os.path.exists(cache_file):
+        data = np.load(cache_file)
+        return data["train"], data["val"]
+
+    # Load and tokenize
+    texts = []
+    for pf in sorted(glob.glob(os.path.join(SAMPLE_DATA_DIR, "*/*.parquet"))):
+        try:
+            df = pd.read_parquet(pf, columns=["text"])
+            texts.extend(df["text"].dropna().tolist())
+        except Exception:
+            continue
+
+    enc = tiktoken.get_encoding("gpt2")
+    eot = enc.eot_token
+    all_tokens = []
+    for text in texts:
+        all_tokens.extend(enc.encode_ordinary(text))
+        all_tokens.append(eot)
+
+    n_seqs = len(all_tokens) // seq_len
+    packed = np.array(all_tokens[:n_seqs * seq_len], dtype=np.int32).reshape(n_seqs, seq_len)
+
+    n_val = max(1, int(n_seqs * 0.05))
+    train, val = packed[:-n_val], packed[-n_val:]
+    np.savez(cache_file, train=train, val=val)
+    return train, val
 
 
 def get_dataloaders(
@@ -112,38 +93,49 @@ def get_dataloaders(
     rank: int = 0,
     world_size: int = 1,
     num_workers: int = 4,
+    data_dir: str | None = None,
 ) -> tuple[DataLoader, DataLoader]:
-    """Build train and val dataloaders with DistributedSampler."""
-    texts = load_texts()
-    train_data, val_data = tokenize_and_pack(texts, seq_len=seq_len)
+    """
+    Build train and val dataloaders.
+    If data_dir points to a directory with meta.json (from prepare_data.py),
+    uses mmap loading. Otherwise falls back to the small sample dataset.
+    """
+    if data_dir is None:
+        data_dir = LARGE_DATA_DIR
 
-    train_ds = TokenDataset(train_data)
-    val_ds = TokenDataset(val_data)
+    meta_path = os.path.join(data_dir, "meta.json")
 
-    train_sampler = DistributedSampler(train_ds, num_replicas=world_size, rank=rank, shuffle=True)
-    val_sampler = DistributedSampler(val_ds, num_replicas=world_size, rank=rank, shuffle=False)
+    if os.path.exists(meta_path):
+        # Large binary dataset
+        with open(meta_path) as f:
+            meta = json.load(f)
+        if rank == 0:
+            print(f"Using large dataset: {meta['n_train']:,} train + {meta['n_val']:,} val seqs "
+                  f"({meta['total_tokens']/1e9:.1f}B tokens)")
+
+        train_ds = MmapTokenDataset(
+            os.path.join(data_dir, "train.bin"), meta["n_train"], meta["seq_len"])
+        val_ds = MmapTokenDataset(
+            os.path.join(data_dir, "val.bin"), meta["n_val"], meta["seq_len"])
+    else:
+        # Fallback to small sample
+        if rank == 0:
+            print(f"Large dataset not found at {data_dir}, using small sample")
+        train_data, val_data = _load_sample_data(seq_len)
+        train_ds = InMemoryTokenDataset(train_data)
+        val_ds = InMemoryTokenDataset(val_data)
+
+    train_sampler = DistributedSampler(
+        train_ds, num_replicas=world_size, rank=rank, shuffle=True, seed=42)
+    val_sampler = DistributedSampler(
+        val_ds, num_replicas=world_size, rank=rank, shuffle=False)
 
     train_loader = DataLoader(
-        train_ds,
-        batch_size=batch_size,
-        sampler=train_sampler,
-        num_workers=num_workers,
-        pin_memory=True,
-        drop_last=True,
+        train_ds, batch_size=batch_size, sampler=train_sampler,
+        num_workers=num_workers, pin_memory=True, drop_last=True,
     )
     val_loader = DataLoader(
-        val_ds,
-        batch_size=batch_size,
-        sampler=val_sampler,
-        num_workers=num_workers,
-        pin_memory=True,
-        drop_last=True,
+        val_ds, batch_size=batch_size, sampler=val_sampler,
+        num_workers=num_workers, pin_memory=True, drop_last=True,
     )
     return train_loader, val_loader
-
-
-if __name__ == "__main__":
-    # Quick test
-    texts = load_texts()
-    train, val = tokenize_and_pack(texts)
-    print(f"Train shape: {train.shape}, Val shape: {val.shape}")

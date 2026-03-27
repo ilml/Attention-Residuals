@@ -1,28 +1,41 @@
 #!/bin/bash
 # Run all 15 scaling law experiments (5 sizes x 3 variants)
-# Usage: bash run_scaling.sh [WANDB_PROJECT]
+# Usage: bash run_scaling.sh [--large]
+#   --large: use large-scale configs with full Nemotron dataset
 
 set -e
 
-WANDB_PROJECT="${1:-attn-residuals}"
+LARGE_FLAG=""
 SAVE_DIR="checkpoints"
-NPROC=4
+if [[ "$1" == "--large" ]]; then
+    LARGE_FLAG="--large"
+    SAVE_DIR="checkpoints_large"
+fi
 
 export WANDB_MODE=offline
-
 mkdir -p "$SAVE_DIR"
 
 CONFIGS=("124M" "172M" "231M" "313M" "401M")
 VARIANTS=("baseline" "full_attnres" "block_attnres")
 
+# Detect GPU count
+if [ -n "$SLURM_NTASKS_PER_NODE" ] && [ -n "$SLURM_NNODES" ]; then
+    NPROC=$SLURM_NTASKS_PER_NODE
+    NNODES=$SLURM_NNODES
+else
+    NPROC=$(python3 -c "import torch; print(torch.cuda.device_count())" 2>/dev/null || echo 4)
+    NNODES=1
+fi
+TOTAL_GPUS=$((NPROC * NNODES))
+
 echo "=========================================="
 echo " Attention Residuals - Scaling Law Sweep"
 echo "=========================================="
+echo "GPUs: $TOTAL_GPUS ($NNODES nodes x $NPROC GPUs)"
 echo "Configs: ${CONFIGS[*]}"
 echo "Variants: ${VARIANTS[*]}"
-echo "Total experiments: $((${#CONFIGS[@]} * ${#VARIANTS[@]}))"
-echo "GPUs: $NPROC"
-echo "wandb project: $WANDB_PROJECT (offline mode)"
+echo "Save dir: $SAVE_DIR"
+echo "Large: ${LARGE_FLAG:-no}"
 echo "=========================================="
 
 EXP=0
@@ -32,16 +45,22 @@ for config in "${CONFIGS[@]}"; do
     for variant in "${VARIANTS[@]}"; do
         EXP=$((EXP + 1))
         echo ""
-        echo ">>> [$EXP/$TOTAL] Config=$config  Variant=$variant"
-        echo "    $(date)"
+        echo ">>> [$EXP/$TOTAL] Config=$config  Variant=$variant  $(date)"
 
-        torchrun --nproc_per_node=$NPROC train.py \
+        torchrun \
+            --nproc_per_node=$NPROC \
+            --nnodes=$NNODES \
+            --rdzv_backend=c10d \
+            --rdzv_endpoint="${MASTER_ADDR:-localhost}:${MASTER_PORT:-29500}" \
+            train.py \
             --config "$config" \
             --variant "$variant" \
-            --wandb_project "$WANDB_PROJECT" \
             --save_dir "$SAVE_DIR" \
-            --val_interval 100 \
-            --log_interval 10
+            --wandb_project attn-residuals \
+            --val_interval 200 \
+            --log_interval 20 \
+            --save_interval 1000 \
+            $LARGE_FLAG
 
         echo "    Done: $config / $variant"
     done
@@ -53,6 +72,4 @@ echo " All experiments complete! Running analysis..."
 echo "=========================================="
 
 python3 analyze.py --results_dir "$SAVE_DIR" --output scaling_law.png
-
-echo "Done. Results in $SAVE_DIR/, plot in scaling_law.png"
-echo "To sync wandb runs: wandb sync wandb/offline-run-*"
+echo "Done."
