@@ -98,6 +98,16 @@ def train():
     device = torch.device(f"cuda:{local_rank}")
     is_master = rank == 0
 
+    # Skip if results already exist (resume-friendly for preemptions)
+    result_file = os.path.join(args.save_dir, f"{args.config}_{args.variant}_results.pt")
+    if os.path.exists(result_file) and is_master:
+        existing = torch.load(result_file, map_location="cpu", weights_only=False)
+        print(f"SKIPPING {args.config}/{args.variant}: results already exist "
+              f"(val_loss={existing['val_loss']:.4f}, pflops_days={existing['pflops_days']:.4f})")
+    if os.path.exists(result_file):
+        dist.destroy_process_group()
+        return
+
     # Seed
     torch.manual_seed(args.seed + rank)
     torch.cuda.manual_seed(args.seed + rank)
@@ -114,7 +124,9 @@ def train():
     else:
         # Auto: full_attnres needs less memory due to O(L^2) saved activations
         if args.variant == "full_attnres":
-            micro_batch = min(2, global_batch // world_size)
+            # 401M+ models need micro_batch=1 to fit in memory
+            mb = 1 if cfg["n_layer"] >= 17 else 2
+            micro_batch = min(mb, global_batch // world_size)
         elif args.variant == "block_attnres":
             micro_batch = min(4, global_batch // world_size)
         else:

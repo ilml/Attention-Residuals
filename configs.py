@@ -5,7 +5,8 @@ Five model sizes following Table 2 of the Attention Residuals paper,
 adapted for dense (non-MoE) models with standard MHA.
 
 d_ff = round(8/3 * d_model) for SwiGLU, rounded to nearest 64.
-Step counts chosen to give a ~20x compute range across configs.
+Step counts chosen to give a ~20x compute range across configs
+while fitting within a 12-hour GPU job.
 """
 
 SCALING_CONFIGS = {
@@ -43,7 +44,7 @@ SCALING_CONFIGS = {
         "d_ff": 3072,
         "lr": 2.2e-3,
         "batch_size": 384,
-        "max_steps": 500,
+        "max_steps": 150,
     },
     "401M": {
         "n_layer": 17,
@@ -52,6 +53,6 @@ SCALING_CONFIGS = {
         "d_ff": 3456,
         "lr": 2.0e-3,
         "batch_size": 432,
-        "max_steps": 600,
+        "max_steps": 100,
     },
 }
