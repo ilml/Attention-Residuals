@@ -1,6 +1,8 @@
 """
 Analysis script for scaling law experiments.
-Loads results, fits power-law curves L = A * C^(-alpha), and plots scaling curves.
+Generates two plots:
+  1. Grouped bar chart: val loss per model size, comparing all 3 variants
+  2. Loss improvement (delta) vs. model size
 
 Usage:
   python analyze.py [--results_dir checkpoints] [--output scaling_law.png]
@@ -13,108 +15,150 @@ import torch
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
-from scipy.optimize import curve_fit
-
-
-def power_law(C, A, alpha):
-    """L = A * C^(-alpha)"""
-    return A * np.power(C, -alpha)
 
 
 def load_results(results_dir: str) -> dict:
-    """Load all result files and organize by variant."""
-    results = {"baseline": [], "full_attnres": [], "block_attnres": []}
+    """Load all result files and organize by (config, variant)."""
+    results = {}
     for f in sorted(os.listdir(results_dir)):
         if f.endswith("_results.pt"):
             data = torch.load(os.path.join(results_dir, f), map_location="cpu", weights_only=False)
-            variant = data["variant"]
-            if variant in results:
-                results[variant].append(data)
+            key = (data["config"], data["variant"])
+            results[key] = data
     return results
 
 
-def fit_and_plot(results: dict, output_path: str):
-    """Fit power-law curves and generate the scaling plot."""
-    fig, ax = plt.subplots(1, 1, figsize=(8, 6))
+def make_plots(results: dict, output_path: str):
+    """Generate a two-panel figure: bar chart + delta chart."""
 
-    colors = {"baseline": "#1f77b4", "full_attnres": "#ff7f0e", "block_attnres": "#2ca02c"}
-    labels = {"baseline": "Baseline (PreNorm)", "full_attnres": "Full AttnRes", "block_attnres": "Block AttnRes"}
-    markers = {"baseline": "o", "full_attnres": "s", "block_attnres": "^"}
+    # Organize data by config
+    configs_order = ["124M", "172M", "231M", "313M", "401M"]
+    variants_order = ["baseline", "full_attnres", "block_attnres"]
+    variant_labels = {
+        "baseline": "Baseline (PreNorm)",
+        "full_attnres": "Full AttnRes",
+        "block_attnres": "Block AttnRes",
+    }
+    colors = {
+        "baseline": "#4878CF",
+        "full_attnres": "#EE854A",
+        "block_attnres": "#6ACC64",
+    }
 
-    fitted_params = {}
+    # Filter to configs that have all 3 variants
+    available_configs = []
+    for cfg in configs_order:
+        if all((cfg, v) in results for v in variants_order):
+            available_configs.append(cfg)
 
-    for variant, data_points in results.items():
-        if len(data_points) < 2:
-            print(f"Skipping {variant}: only {len(data_points)} data points")
-            continue
+    if not available_configs:
+        print("No configs with all 3 variants found.")
+        return
 
-        # Sort by compute
-        data_points.sort(key=lambda x: x["pflops_days"])
-        C = np.array([d["pflops_days"] for d in data_points])
-        L = np.array([d["val_loss"] for d in data_points])
+    n_configs = len(available_configs)
+    n_variants = len(variants_order)
 
-        # Scatter plot
-        ax.scatter(C, L, color=colors[variant], marker=markers[variant],
-                   s=80, zorder=5, label=None)
+    # Extract losses and tokens
+    losses = {v: [] for v in variants_order}
+    tokens_info = []
+    params_info = []
+    for cfg in available_configs:
+        for v in variants_order:
+            d = results[(cfg, v)]
+            losses[v].append(d["val_loss"])
+        d0 = results[(cfg, "baseline")]
+        tokens_info.append(d0["tokens_seen"])
+        params_info.append(d0["num_params"])
 
-        # Fit power law
-        try:
-            popt, pcov = curve_fit(power_law, C, L, p0=[2.0, 0.05], maxfev=10000)
-            A, alpha = popt
-            fitted_params[variant] = (A, alpha)
+    # ---- Figure ----
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 5.5), gridspec_kw={"width_ratios": [3, 2]})
 
-            # Plot fitted curve
-            C_fit = np.linspace(C.min() * 0.8, C.max() * 1.2, 200)
-            L_fit = power_law(C_fit, A, alpha)
-            label_str = f"{labels[variant]}: {A:.3f} x C^(-{alpha:.3f})"
-            ax.plot(C_fit, L_fit, color=colors[variant], linewidth=2, label=label_str)
-            print(f"{variant}: L = {A:.4f} * C^(-{alpha:.4f})")
-        except Exception as e:
-            print(f"Could not fit {variant}: {e}")
-            ax.plot(C, L, color=colors[variant], linewidth=2,
-                    label=f"{labels[variant]} (no fit)", marker=markers[variant])
+    # -- Panel 1: Grouped bar chart --
+    bar_width = 0.22
+    x = np.arange(n_configs)
 
-    ax.set_xlabel("PFLOP/s-days", fontsize=13)
-    ax.set_ylabel("Validation Loss", fontsize=13)
-    ax.set_title("Scaling Law: Attention Residuals", fontsize=14)
-    ax.set_xscale("log")
-    ax.legend(fontsize=11)
-    ax.grid(True, alpha=0.3)
+    for i, v in enumerate(variants_order):
+        offset = (i - 1) * bar_width
+        bars = ax1.bar(
+            x + offset, losses[v], bar_width,
+            label=variant_labels[v], color=colors[v],
+            edgecolor="white", linewidth=0.8,
+        )
+        # Value labels on bars
+        for bar, val in zip(bars, losses[v]):
+            ax1.text(
+                bar.get_x() + bar.get_width() / 2, bar.get_height() + 0.04,
+                f"{val:.2f}", ha="center", va="bottom", fontsize=7.5, fontweight="bold",
+            )
+
+    # X-axis labels with token counts
+    xlabels = []
+    for cfg, tok, par in zip(available_configs, tokens_info, params_info):
+        tok_m = tok / 1e6
+        par_m = par / 1e6
+        xlabels.append(f"{cfg}\n({par_m:.0f}M params, {tok_m:.0f}M tok)")
+    ax1.set_xticks(x)
+    ax1.set_xticklabels(xlabels, fontsize=8.5)
+    ax1.set_ylabel("Validation Loss", fontsize=12)
+    ax1.set_title("Validation Loss by Model Size", fontsize=13, fontweight="bold")
+    ax1.legend(fontsize=9, loc="upper left")
+    ax1.grid(axis="y", alpha=0.3)
+    ax1.set_axisbelow(True)
+
+    # -- Panel 2: Improvement (delta) chart --
+    baseline_losses = np.array(losses["baseline"])
+    for v in ["full_attnres", "block_attnres"]:
+        deltas = baseline_losses - np.array(losses[v])
+        ax2.plot(x, deltas, marker="o", linewidth=2, markersize=8,
+                 color=colors[v], label=variant_labels[v])
+        for xi, d in zip(x, deltas):
+            ax2.annotate(
+                f"{d:+.2f}", (xi, d),
+                textcoords="offset points", xytext=(0, 10),
+                ha="center", fontsize=8, fontweight="bold",
+                color=colors[v],
+            )
+
+    ax2.axhline(y=0, color="gray", linestyle="--", linewidth=1, alpha=0.7)
+    ax2.set_xticks(x)
+    ax2.set_xticklabels(available_configs, fontsize=9)
+    ax2.set_xlabel("Model Size", fontsize=11)
+    ax2.set_ylabel("Loss Improvement vs Baseline", fontsize=11)
+    ax2.set_title("AttnRes Improvement Over Baseline", fontsize=13, fontweight="bold")
+    ax2.legend(fontsize=9)
+    ax2.grid(axis="y", alpha=0.3)
+    ax2.set_axisbelow(True)
+
+    # Shade positive region
+    ax2.axhspan(0, ax2.get_ylim()[1] if ax2.get_ylim()[1] > 0 else 1, alpha=0.05, color="green")
+    ax2.axhspan(ax2.get_ylim()[0] if ax2.get_ylim()[0] < 0 else -1, 0, alpha=0.05, color="red")
+
     plt.tight_layout()
-    plt.savefig(output_path, dpi=150)
-    print(f"\nPlot saved to {output_path}")
+    plt.savefig(output_path, dpi=150, bbox_inches="tight")
+    print(f"Plot saved to {output_path}")
 
-    # Print summary table
-    print("\n" + "="*70)
-    print(f"{'Variant':<20} {'A':>8} {'alpha':>8} {'Data Points':>12}")
-    print("-"*70)
-    for variant, data_points in results.items():
-        if variant in fitted_params:
-            A, alpha = fitted_params[variant]
-            print(f"{variant:<20} {A:8.4f} {alpha:8.4f} {len(data_points):>12}")
-    print("="*70)
+    # ---- Print summary table ----
+    print()
+    print("=" * 85)
+    print(f"{'Config':<8} {'Tokens':>10} {'Baseline':>10} {'Full AttnRes':>14} {'Block AttnRes':>15} {'Best Delta':>12}")
+    print("-" * 85)
+    for i, cfg in enumerate(available_configs):
+        bl = losses["baseline"][i]
+        fa = losses["full_attnres"][i]
+        ba = losses["block_attnres"][i]
+        best = min(fa, ba)
+        delta = bl - best
+        winner = "Full" if fa < ba else "Block"
+        print(f"{cfg:<8} {tokens_info[i]:>10,} {bl:>10.4f} {fa:>14.4f} {ba:>15.4f} {delta:>+11.4f} ({winner})")
+    print("=" * 85)
 
-    # Compute advantage at largest compute
-    if "baseline" in fitted_params and "block_attnres" in fitted_params:
-        A_b, alpha_b = fitted_params["baseline"]
-        A_a, alpha_a = fitted_params["block_attnres"]
-        # Find compute where block_attnres reaches baseline's best loss
-        all_C = []
-        for dp in results["baseline"]:
-            all_C.append(dp["pflops_days"])
-        C_max = max(all_C)
-        L_baseline = power_law(C_max, A_b, alpha_b)
-        L_attnres = power_law(C_max, A_a, alpha_a)
-        print(f"\nAt {C_max:.4f} PFLOP/s-days:")
-        print(f"  Baseline loss:     {L_baseline:.4f}")
-        print(f"  Block AttnRes loss: {L_attnres:.4f}")
-        if L_attnres < L_baseline:
-            # Compute equivalent: find C where baseline = L_attnres
-            C_equiv = (L_attnres / A_b) ** (-1.0 / alpha_b)
-            advantage = C_equiv / C_max
-            print(f"  Compute advantage: {advantage:.2f}x")
-
-    return fitted_params
+    # Overall stats
+    wins = sum(1 for i in range(n_configs)
+               if min(losses["full_attnres"][i], losses["block_attnres"][i]) < losses["baseline"][i])
+    print(f"\nAttnRes wins: {wins}/{n_configs} model sizes")
+    avg_delta_full = np.mean(np.array(losses["baseline"]) - np.array(losses["full_attnres"]))
+    avg_delta_block = np.mean(np.array(losses["baseline"]) - np.array(losses["block_attnres"]))
+    print(f"Avg improvement — Full AttnRes: {avg_delta_full:+.4f}, Block AttnRes: {avg_delta_block:+.4f}")
 
 
 def main():
@@ -124,14 +168,14 @@ def main():
     args = parser.parse_args()
 
     results = load_results(args.results_dir)
-    total = sum(len(v) for v in results.values())
+    total = len(results)
     print(f"Loaded {total} result files from {args.results_dir}")
 
     if total == 0:
         print("No results found. Run training first.")
         return
 
-    fit_and_plot(results, args.output)
+    make_plots(results, args.output)
 
 
 if __name__ == "__main__":
