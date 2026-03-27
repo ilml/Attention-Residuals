@@ -1,8 +1,6 @@
 """
 Analysis script for scaling law experiments.
-Generates two plots:
-  1. Grouped bar chart: val loss per model size, comparing all 3 variants
-  2. Loss improvement (delta) vs. model size
+Generates a clean two-panel figure comparing all 3 residual variants.
 
 Usage:
   python analyze.py [--results_dir checkpoints] [--output scaling_law.png]
@@ -15,6 +13,7 @@ import torch
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
+import matplotlib.ticker as ticker
 
 
 def load_results(results_dir: str) -> dict:
@@ -29,9 +28,6 @@ def load_results(results_dir: str) -> dict:
 
 
 def make_plots(results: dict, output_path: str):
-    """Generate a two-panel figure: bar chart + delta chart."""
-
-    # Organize data by config
     configs_order = ["124M", "172M", "231M", "313M", "401M"]
     variants_order = ["baseline", "full_attnres", "block_attnres"]
     variant_labels = {
@@ -40,125 +36,126 @@ def make_plots(results: dict, output_path: str):
         "block_attnres": "Block AttnRes",
     }
     colors = {
-        "baseline": "#4878CF",
-        "full_attnres": "#EE854A",
-        "block_attnres": "#6ACC64",
+        "baseline": "#5B7FBF",
+        "full_attnres": "#E8873D",
+        "block_attnres": "#59B95D",
     }
 
-    # Filter to configs that have all 3 variants
-    available_configs = []
-    for cfg in configs_order:
-        if all((cfg, v) in results for v in variants_order):
-            available_configs.append(cfg)
-
+    available_configs = [c for c in configs_order
+                         if all((c, v) in results for v in variants_order)]
     if not available_configs:
         print("No configs with all 3 variants found.")
         return
 
-    n_configs = len(available_configs)
-    n_variants = len(variants_order)
+    n = len(available_configs)
+    losses = {v: [results[(c, v)]["val_loss"] for c in available_configs] for v in variants_order}
+    tokens = [results[(c, "baseline")]["tokens_seen"] for c in available_configs]
 
-    # Extract losses and tokens
-    losses = {v: [] for v in variants_order}
-    tokens_info = []
-    params_info = []
-    for cfg in available_configs:
-        for v in variants_order:
-            d = results[(cfg, v)]
-            losses[v].append(d["val_loss"])
-        d0 = results[(cfg, "baseline")]
-        tokens_info.append(d0["tokens_seen"])
-        params_info.append(d0["num_params"])
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(16, 7),
+                                    gridspec_kw={"width_ratios": [1.4, 1], "wspace": 0.35})
 
-    # ---- Figure ----
-    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 5.5), gridspec_kw={"width_ratios": [3, 2]})
-
-    # -- Panel 1: Grouped bar chart --
-    bar_width = 0.22
-    x = np.arange(n_configs)
+    # ── Panel 1: grouped bars ──
+    bar_w = 0.25
+    x = np.arange(n)
 
     for i, v in enumerate(variants_order):
-        offset = (i - 1) * bar_width
-        bars = ax1.bar(
-            x + offset, losses[v], bar_width,
-            label=variant_labels[v], color=colors[v],
-            edgecolor="white", linewidth=0.8,
-        )
-        # Value labels on bars
+        offset = (i - 1) * bar_w
+        bars = ax1.bar(x + offset, losses[v], bar_w,
+                       label=variant_labels[v], color=colors[v],
+                       edgecolor="white", linewidth=1.0, zorder=3)
         for bar, val in zip(bars, losses[v]):
-            ax1.text(
-                bar.get_x() + bar.get_width() / 2, bar.get_height() + 0.04,
-                f"{val:.2f}", ha="center", va="bottom", fontsize=7.5, fontweight="bold",
-            )
+            ax1.text(bar.get_x() + bar.get_width() / 2,
+                     bar.get_height() + 0.06,
+                     f"{val:.2f}", ha="center", va="bottom",
+                     fontsize=10, fontweight="bold", color="#333")
 
-    # X-axis labels with token counts
-    xlabels = []
-    for cfg, tok, par in zip(available_configs, tokens_info, params_info):
-        tok_m = tok / 1e6
-        par_m = par / 1e6
-        xlabels.append(f"{cfg}\n({par_m:.0f}M params, {tok_m:.0f}M tok)")
+    # x labels: model name on first line, token count on second
+    tok_labels = []
+    for c, t in zip(available_configs, tokens):
+        if t >= 1e9:
+            tok_labels.append(f"{c}\n({t/1e9:.1f}B tokens)")
+        else:
+            tok_labels.append(f"{c}\n({t/1e6:.0f}M tokens)")
+
     ax1.set_xticks(x)
-    ax1.set_xticklabels(xlabels, fontsize=8.5)
-    ax1.set_ylabel("Validation Loss", fontsize=12)
-    ax1.set_title("Validation Loss by Model Size", fontsize=13, fontweight="bold")
-    ax1.legend(fontsize=9, loc="upper left")
-    ax1.grid(axis="y", alpha=0.3)
+    ax1.set_xticklabels(tok_labels, fontsize=12)
+    ax1.set_ylabel("Validation Loss", fontsize=14)
+    ax1.set_title("Validation Loss by Model Size", fontsize=16, fontweight="bold", pad=12)
+    ax1.legend(fontsize=12, loc="upper right", framealpha=0.9)
+    ax1.grid(axis="y", alpha=0.25, zorder=0)
     ax1.set_axisbelow(True)
+    ax1.tick_params(axis="y", labelsize=11)
+    ax1.set_ylim(0, max(max(losses[v]) for v in variants_order) * 1.15)
 
-    # -- Panel 2: Improvement (delta) chart --
-    baseline_losses = np.array(losses["baseline"])
-    for v in ["full_attnres", "block_attnres"]:
-        deltas = baseline_losses - np.array(losses[v])
-        ax2.plot(x, deltas, marker="o", linewidth=2, markersize=8,
-                 color=colors[v], label=variant_labels[v])
-        for xi, d in zip(x, deltas):
-            ax2.annotate(
-                f"{d:+.2f}", (xi, d),
-                textcoords="offset points", xytext=(0, 10),
-                ha="center", fontsize=8, fontweight="bold",
-                color=colors[v],
-            )
+    # ── Panel 2: delta bars ──
+    bl = np.array(losses["baseline"])
+    delta_full = bl - np.array(losses["full_attnres"])
+    delta_block = bl - np.array(losses["block_attnres"])
 
-    ax2.axhline(y=0, color="gray", linestyle="--", linewidth=1, alpha=0.7)
+    bar_w2 = 0.35
+    bars_f = ax2.bar(x - bar_w2 / 2, delta_full, bar_w2,
+                     label="Full AttnRes", color=colors["full_attnres"],
+                     edgecolor="white", linewidth=1.0, zorder=3)
+    bars_b = ax2.bar(x + bar_w2 / 2, delta_block, bar_w2,
+                     label="Block AttnRes", color=colors["block_attnres"],
+                     edgecolor="white", linewidth=1.0, zorder=3)
+
+    for bar, val in zip(bars_f, delta_full):
+        y = bar.get_height()
+        ax2.text(bar.get_x() + bar.get_width() / 2,
+                 y + (0.02 if y >= 0 else -0.06),
+                 f"{val:+.2f}", ha="center", va="bottom" if y >= 0 else "top",
+                 fontsize=10, fontweight="bold", color=colors["full_attnres"])
+    for bar, val in zip(bars_b, delta_block):
+        y = bar.get_height()
+        ax2.text(bar.get_x() + bar.get_width() / 2,
+                 y + (0.02 if y >= 0 else -0.06),
+                 f"{val:+.2f}", ha="center", va="bottom" if y >= 0 else "top",
+                 fontsize=10, fontweight="bold", color=colors["block_attnres"])
+
+    ax2.axhline(0, color="#666", linewidth=1.2, zorder=2)
     ax2.set_xticks(x)
-    ax2.set_xticklabels(available_configs, fontsize=9)
-    ax2.set_xlabel("Model Size", fontsize=11)
-    ax2.set_ylabel("Loss Improvement vs Baseline", fontsize=11)
-    ax2.set_title("AttnRes Improvement Over Baseline", fontsize=13, fontweight="bold")
-    ax2.legend(fontsize=9)
-    ax2.grid(axis="y", alpha=0.3)
+    ax2.set_xticklabels(available_configs, fontsize=12)
+    ax2.set_ylabel("Loss Improvement vs Baseline", fontsize=14)
+    ax2.set_title("AttnRes Gain Over Baseline", fontsize=16, fontweight="bold", pad=12)
+    ax2.legend(fontsize=12, loc="lower right", framealpha=0.9)
+    ax2.grid(axis="y", alpha=0.25, zorder=0)
     ax2.set_axisbelow(True)
+    ax2.tick_params(axis="y", labelsize=11)
 
-    # Shade positive region
-    ax2.axhspan(0, ax2.get_ylim()[1] if ax2.get_ylim()[1] > 0 else 1, alpha=0.05, color="green")
-    ax2.axhspan(ax2.get_ylim()[0] if ax2.get_ylim()[0] < 0 else -1, 0, alpha=0.05, color="red")
+    # shade positive / negative regions
+    ylim = ax2.get_ylim()
+    ax2.axhspan(0, max(ylim[1], 0.1), alpha=0.06, color="green", zorder=0)
+    ax2.axhspan(min(ylim[0], -0.1), 0, alpha=0.06, color="red", zorder=0)
 
-    plt.tight_layout()
-    plt.savefig(output_path, dpi=150, bbox_inches="tight")
+    # footnote
+    fig.text(0.5, 0.01,
+             "Positive = AttnRes better than baseline.  Negative = baseline better.  "
+             "All variants share identical hyperparameters per model size.",
+             ha="center", fontsize=10, color="#666", style="italic")
+
+    plt.savefig(output_path, dpi=150, bbox_inches="tight", pad_inches=0.3)
     print(f"Plot saved to {output_path}")
 
-    # ---- Print summary table ----
+    # ── Summary table ──
     print()
-    print("=" * 85)
-    print(f"{'Config':<8} {'Tokens':>10} {'Baseline':>10} {'Full AttnRes':>14} {'Block AttnRes':>15} {'Best Delta':>12}")
-    print("-" * 85)
+    hdr = f"{'Config':<8} {'Tokens':>10} {'Baseline':>10} {'Full':>10} {'Block':>10} {'Best Delta':>12}"
+    print("=" * len(hdr))
+    print(hdr)
+    print("-" * len(hdr))
     for i, cfg in enumerate(available_configs):
-        bl = losses["baseline"][i]
-        fa = losses["full_attnres"][i]
-        ba = losses["block_attnres"][i]
-        best = min(fa, ba)
-        delta = bl - best
-        winner = "Full" if fa < ba else "Block"
-        print(f"{cfg:<8} {tokens_info[i]:>10,} {bl:>10.4f} {fa:>14.4f} {ba:>15.4f} {delta:>+11.4f} ({winner})")
-    print("=" * 85)
-
-    # Overall stats
-    wins = sum(1 for i in range(n_configs)
+        b, f_, bk = losses["baseline"][i], losses["full_attnres"][i], losses["block_attnres"][i]
+        best = min(f_, bk)
+        delta = b - best
+        tag = "Full" if f_ < bk else "Block"
+        print(f"{cfg:<8} {tokens[i]:>10,} {b:>10.4f} {f_:>10.4f} {bk:>10.4f} {delta:>+11.3f} ({tag})")
+    print("=" * len(hdr))
+    wins = sum(1 for i in range(n)
                if min(losses["full_attnres"][i], losses["block_attnres"][i]) < losses["baseline"][i])
-    print(f"\nAttnRes wins: {wins}/{n_configs} model sizes")
-    avg_delta_full = np.mean(np.array(losses["baseline"]) - np.array(losses["full_attnres"]))
-    avg_delta_block = np.mean(np.array(losses["baseline"]) - np.array(losses["block_attnres"]))
-    print(f"Avg improvement — Full AttnRes: {avg_delta_full:+.4f}, Block AttnRes: {avg_delta_block:+.4f}")
+    avg_f = np.mean(bl - np.array(losses["full_attnres"]))
+    avg_b = np.mean(bl - np.array(losses["block_attnres"]))
+    print(f"\nAttnRes wins: {wins}/{n} model sizes")
+    print(f"Avg improvement -- Full: {avg_f:+.3f}, Block: {avg_b:+.3f}")
 
 
 def main():
@@ -168,13 +165,10 @@ def main():
     args = parser.parse_args()
 
     results = load_results(args.results_dir)
-    total = len(results)
-    print(f"Loaded {total} result files from {args.results_dir}")
-
-    if total == 0:
+    print(f"Loaded {len(results)} result files from {args.results_dir}")
+    if not results:
         print("No results found. Run training first.")
         return
-
     make_plots(results, args.output)
 
 
