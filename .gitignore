@@ -5,5 +5,5 @@ checkpoints/
 checkpoints_test/
 wandb/
 logs/
-*.png
+scaling_law.png
 .claude/
