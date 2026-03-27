@@ -15,7 +15,6 @@ mkdir -p logs
 
 cd /home/tolong/work/Attention-Residuals
 
-# Multi-node config
 export MASTER_ADDR=$(scontrol show hostname $SLURM_NODELIST | head -n1)
 export MASTER_PORT=29500
 export NCCL_DEBUG=WARN
@@ -31,9 +30,8 @@ SAVE_DIR="checkpoints_large"
 mkdir -p "$SAVE_DIR"
 
 echo "========================================"
-echo "Job: $SLURM_JOB_ID | Nodes: $NNODES | GPUs: $TOTAL_GPUS"
+echo "Job: $SLURM_JOB_ID | Nodes: $NNODES ($SLURM_NODELIST) | GPUs: $TOTAL_GPUS"
 echo "Master: $MASTER_ADDR:$MASTER_PORT"
-echo "Data: $DATA_DIR"
 echo "Start: $(date)"
 echo "========================================"
 
@@ -49,11 +47,14 @@ for config in "${CONFIGS[@]}"; do
         echo ""
         echo ">>> [$EXP/$TOTAL] Config=$config Variant=$variant $(date)"
 
+        # Use a unique port per experiment to avoid stale rendezvous state
+        RDZV_PORT=$((29500 + EXP))
+
         srun torchrun \
             --nproc_per_node=$NPROC \
             --nnodes=$NNODES \
             --rdzv_backend=c10d \
-            --rdzv_endpoint="$MASTER_ADDR:$MASTER_PORT" \
+            --rdzv_endpoint="$MASTER_ADDR:$RDZV_PORT" \
             train.py \
             --config "$config" \
             --variant "$variant" \
@@ -63,9 +64,11 @@ for config in "${CONFIGS[@]}"; do
             --wandb_project attn-residuals-large \
             --val_interval 200 \
             --log_interval 20 \
-            --save_interval 0
+            --save_interval 0 \
+        || echo "WARNING: $config/$variant failed, continuing..."
 
         echo "    Done: $config / $variant"
+        sleep 5  # Brief pause between experiments
     done
 done
 
