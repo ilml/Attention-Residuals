@@ -115,9 +115,9 @@ def load_checkpoint(path, model, optimizer, device):
 
 def auto_micro_batch(variant: str, n_layer: int, world_size: int, global_batch: int) -> int:
     """Pick micro_batch based on variant, model size, and GPU count."""
-    per_gpu = global_batch // world_size
+    per_gpu = max(1, global_batch // world_size)
     if variant == "full_attnres":
-        # O(L^2) memory; conservative
+        # O(L^2) memory; very conservative
         if n_layer >= 17:
             mb = 1
         elif n_layer >= 14:
@@ -125,8 +125,15 @@ def auto_micro_batch(variant: str, n_layer: int, world_size: int, global_batch: 
         else:
             mb = 4
     elif variant == "block_attnres":
-        mb = min(8, per_gpu)
+        # Block AttnRes also needs more memory than baseline due to stored block reps
+        if n_layer >= 17:
+            mb = 2
+        elif n_layer >= 14:
+            mb = 4
+        else:
+            mb = 6
     else:
+        # Baseline is memory-efficient
         mb = min(16, per_gpu)
     return max(1, min(mb, per_gpu))
 
