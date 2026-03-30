@@ -114,10 +114,11 @@ def load_checkpoint(path, model, optimizer, device):
 
 
 def auto_micro_batch(variant: str, n_layer: int, world_size: int, global_batch: int) -> int:
-    """Pick micro_batch based on variant, model size, and GPU count."""
+    """Pick micro_batch based on variant, model size, and GPU count.
+    With many GPUs (e.g. 256), per_gpu can be <1, so we always use at least 1
+    and rely on grad_accum to reach the target batch size."""
     per_gpu = max(1, global_batch // world_size)
     if variant == "full_attnres":
-        # O(L^2) memory; very conservative
         if n_layer >= 17:
             mb = 1
         elif n_layer >= 14:
@@ -125,7 +126,6 @@ def auto_micro_batch(variant: str, n_layer: int, world_size: int, global_batch: 
         else:
             mb = 4
     elif variant == "block_attnres":
-        # Block AttnRes also needs more memory than baseline due to stored block reps
         if n_layer >= 17:
             mb = 2
         elif n_layer >= 14:
@@ -133,9 +133,9 @@ def auto_micro_batch(variant: str, n_layer: int, world_size: int, global_batch: 
         else:
             mb = 6
     else:
-        # Baseline is memory-efficient
         mb = min(16, per_gpu)
-    return max(1, min(mb, per_gpu))
+    # With many GPUs, per_gpu may be 0; ensure at least 1
+    return max(1, min(mb, max(1, per_gpu)))
 
 
 def train():

@@ -17,7 +17,7 @@ SEQ_LEN = 8192
 
 # Default paths
 SAMPLE_DATA_DIR = "/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_llm/users/tolong/data/Nemotron-Pretraining-Dataset-sample"
-LARGE_DATA_DIR = "/lustre/fsw/portfolios/coreai/users/tolong/data/nemotron_tokenized"
+LARGE_DATA_DIR = "/lustre/fsw/portfolios/coreai/users/tolong/data/nemotron_tokenized_150B"
 
 
 class MmapTokenDataset(Dataset):

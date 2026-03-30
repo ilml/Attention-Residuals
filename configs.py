@@ -1,78 +1,80 @@
 """
 Model configurations for scaling law experiments.
 
-Two sets:
-  SCALING_CONFIGS_SMALL  — for quick tests on the sample dataset (4 GPUs)
-  SCALING_CONFIGS        — for proper runs on the full Nemotron dataset (32 GPUs)
+SCALING_CONFIGS_PAPER: Exact reproduction of Table 2 from the paper.
+  - Token counts match the paper exactly (38.7B - 119B)
+  - Dense models approximate the paper's MoE activated parameter counts
+  - d_model adjusted for clean MHA head dimensions (head_dim=64)
+  - d_ff uses SwiGLU standard ratio: round(8/3 * d_model)
 
-Token budgets follow Chinchilla scaling (~20 tokens per parameter).
+SCALING_CONFIGS_SMALL: Quick tests on sample dataset (4 GPUs, <1h)
 """
 
 # ---------------------------------------------------------------------------
-# Large-scale configs for 32 GPUs (8 nodes x 4 GPUs)
-# Chinchilla-optimal: ~20 tokens/param, proper batch sizes
+# Paper-exact configs (Table 2 reproduction)
+# Dense equivalents of the MoE models, trained for the same token counts
 # ---------------------------------------------------------------------------
 SCALING_CONFIGS = {
-    "124M": {
-        "n_layer": 12,
-        "d_model": 768,
-        "n_head": 12,
-        "d_ff": 2048,
-        "lr": 3.0e-3,
-        "batch_size": 192,    # sequences of 8192 tokens
-        "total_tokens": 2_500_000_000,  # 2.5B tokens
+    "194M": {
+        "n_layer": 12,      # L_b=12 (paper)
+        "d_model": 768,     # paper: 896, adjusted for head_dim=64
+        "n_head": 12,       # paper: 12
+        "d_ff": 2048,       # SwiGLU: round(8/3 * 768)
+        "lr": 2.99e-3,      # paper exact
+        "batch_size": 192,  # paper exact
+        "total_tokens": 38_700_000_000,  # paper exact: 38.7B
     },
-    "172M": {
+    "241M": {
         "n_layer": 13,
-        "d_model": 896,
+        "d_model": 896,     # paper: 960, adjusted for head_dim=64
         "n_head": 14,
         "d_ff": 2432,
-        "lr": 2.8e-3,
+        "lr": 2.80e-3,
         "batch_size": 256,
-        "total_tokens": 3_400_000_000,
+        "total_tokens": 45_400_000_000,  # paper exact: 45.4B
     },
-    "231M": {
+    "296M": {
         "n_layer": 14,
-        "d_model": 1024,
+        "d_model": 1024,    # paper: 1024
         "n_head": 16,
         "d_ff": 2816,
-        "lr": 2.5e-3,
+        "lr": 2.50e-3,
         "batch_size": 320,
-        "total_tokens": 4_600_000_000,
+        "total_tokens": 62_100_000_000,  # paper exact: 62.1B
     },
-    "313M": {
+    "436M": {
         "n_layer": 16,
-        "d_model": 1152,
+        "d_model": 1152,    # paper: 1168, adjusted for head_dim=64
         "n_head": 18,
         "d_ff": 3072,
-        "lr": 2.2e-3,
+        "lr": 2.20e-3,
         "batch_size": 384,
-        "total_tokens": 6_300_000_000,
+        "total_tokens": 87_900_000_000,  # paper exact: 87.9B
     },
-    "401M": {
+    "528M": {
         "n_layer": 17,
-        "d_model": 1280,
+        "d_model": 1280,    # paper: 1264, adjusted for head_dim=64
         "n_head": 20,
         "d_ff": 3456,
-        "lr": 2.0e-3,
-        "batch_size": 448,
-        "total_tokens": 8_000_000_000,
+        "lr": 2.02e-3,
+        "batch_size": 432,
+        "total_tokens": 119_000_000_000, # paper exact: 119B
     },
 }
 
-# Compute max_steps from total_tokens for each config
+# Compute max_steps from total_tokens
 for _name, _cfg in SCALING_CONFIGS.items():
     _tokens_per_step = _cfg["batch_size"] * 8192
     _cfg["max_steps"] = _cfg["total_tokens"] // _tokens_per_step
 
 
 # ---------------------------------------------------------------------------
-# Small configs for quick tests on the sample dataset (4 GPUs, 1 node)
+# Small configs for quick tests
 # ---------------------------------------------------------------------------
 SCALING_CONFIGS_SMALL = {
-    "124M": {**SCALING_CONFIGS["124M"], "max_steps": 200, "batch_size": 192},
-    "172M": {**SCALING_CONFIGS["172M"], "max_steps": 300, "batch_size": 256},
-    "231M": {**SCALING_CONFIGS["231M"], "max_steps": 400, "batch_size": 320},
-    "313M": {**SCALING_CONFIGS["313M"], "max_steps": 150, "batch_size": 384},
-    "401M": {**SCALING_CONFIGS["401M"], "max_steps": 100, "batch_size": 448},
+    "194M": {**SCALING_CONFIGS["194M"], "max_steps": 200},
+    "241M": {**SCALING_CONFIGS["241M"], "max_steps": 300},
+    "296M": {**SCALING_CONFIGS["296M"], "max_steps": 400},
+    "436M": {**SCALING_CONFIGS["436M"], "max_steps": 150},
+    "528M": {**SCALING_CONFIGS["528M"], "max_steps": 100},
 }
