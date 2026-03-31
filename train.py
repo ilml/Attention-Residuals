@@ -213,13 +213,21 @@ def train():
         model.parameters(), lr=cfg["lr"],
         betas=(0.9, 0.95), weight_decay=0.1, eps=1e-8)
 
-    # Resume from checkpoint
+    # Resume from checkpoint (auto-detect latest if not specified)
     start_step = 0
     tokens_seen = 0
-    if args.resume and os.path.exists(args.resume):
-        start_step, tokens_seen = load_checkpoint(args.resume, model, optimizer, device)
+    resume_path = args.resume
+    if not resume_path:
+        # Auto-find latest checkpoint for this config/variant
+        import glob as _glob
+        pattern = os.path.join(args.save_dir, f"{args.config}_{args.variant}_step*.pt")
+        ckpts = sorted(_glob.glob(pattern))
+        if ckpts:
+            resume_path = ckpts[-1]  # latest by name (highest step number)
+    if resume_path and os.path.exists(resume_path):
+        start_step, tokens_seen = load_checkpoint(resume_path, model, optimizer, device)
         if is_master:
-            print(f"Resumed from {args.resume} at step {start_step}")
+            print(f"RESUMED from {resume_path} at step {start_step}")
 
     ctx = autocast(device_type="cuda", dtype=torch.bfloat16)
 
