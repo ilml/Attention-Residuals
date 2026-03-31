@@ -218,12 +218,14 @@ def train():
     tokens_seen = 0
     resume_path = args.resume
     if not resume_path:
-        # Auto-find latest checkpoint for this config/variant
-        import glob as _glob
+        # Auto-find latest checkpoint for this config/variant (sort by step number)
+        import glob as _glob, re as _re
         pattern = os.path.join(args.save_dir, f"{args.config}_{args.variant}_step*.pt")
-        ckpts = sorted(_glob.glob(pattern))
+        ckpts = _glob.glob(pattern)
         if ckpts:
-            resume_path = ckpts[-1]  # latest by name (highest step number)
+            # Sort numerically by step number, not alphabetically
+            ckpts.sort(key=lambda p: int(_re.search(r"step(\d+)", p).group(1)))
+            resume_path = ckpts[-1]  # highest step number
     if resume_path and os.path.exists(resume_path):
         start_step, tokens_seen = load_checkpoint(resume_path, model, optimizer, device)
         if is_master:
