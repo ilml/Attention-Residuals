@@ -92,7 +92,8 @@ def validate(model, val_loader, device, ctx):
     return (stats[0] / stats[1]).item()
 
 
-def save_checkpoint(model, optimizer, step, tokens_seen, args, cfg, path):
+def save_checkpoint(model, optimizer, step, tokens_seen, args, cfg, path,
+                    wandb_run_id=None):
     raw_model = model.module if hasattr(model, "module") else model
     torch.save({
         "model_state_dict": raw_model.state_dict(),
@@ -102,6 +103,7 @@ def save_checkpoint(model, optimizer, step, tokens_seen, args, cfg, path):
         "config": args.config,
         "variant": args.variant,
         "cfg": cfg,
+        "wandb_run_id": wandb_run_id,
     }, path)
 
 
@@ -110,7 +112,7 @@ def load_checkpoint(path, model, optimizer, device):
     raw_model = model.module if hasattr(model, "module") else model
     raw_model.load_state_dict(ckpt["model_state_dict"])
     optimizer.load_state_dict(ckpt["optimizer_state_dict"])
-    return ckpt["step"], ckpt["tokens_seen"]
+    return ckpt["step"], ckpt["tokens_seen"], ckpt.get("wandb_run_id")
 
 
 def auto_micro_batch(variant: str, n_layer: int, world_size: int, global_batch: int) -> int:
@@ -226,8 +228,10 @@ def train():
             # Sort numerically by step number, not alphabetically
             ckpts.sort(key=lambda p: int(_re.search(r"step(\d+)", p).group(1)))
             resume_path = ckpts[-1]  # highest step number
+    resumed_wandb_id = None
     if resume_path and os.path.exists(resume_path):
-        start_step, tokens_seen = load_checkpoint(resume_path, model, optimizer, device)
+        start_step, tokens_seen, resumed_wandb_id = load_checkpoint(
+            resume_path, model, optimizer, device)
         if is_master:
             print(f"RESUMED from {resume_path} at step {start_step}")
 
@@ -240,15 +244,16 @@ def train():
         num_workers=4, data_dir=args.data_dir)
 
     # wandb — enabled by default, set WANDB_MODE=offline to disable cloud sync
+    # On resume, continues the SAME wandb run for a single unbroken loss curve
     use_wandb = False
     if is_master:
         run_name = f"{args.config}_{args.variant}"
         try:
-            wandb.init(
+            init_kwargs = dict(
                 project=args.wandb_project,
                 entity=args.wandb_entity,
                 name=run_name,
-                group=args.config,       # group runs by model size
+                group=args.config,
                 tags=[args.variant, args.config,
                       "large" if args.large else "small"],
                 config={
@@ -271,6 +276,12 @@ def train():
                     "num_blocks": args.num_blocks,
                 },
             )
+            # Resume same wandb run if we have a run ID from checkpoint
+            if resumed_wandb_id:
+                init_kwargs["id"] = resumed_wandb_id
+                init_kwargs["resume"] = "allow"
+
+            wandb.init(**init_kwargs)
             # Define metric sections for grouped panels
             wandb.define_metric("train/*", step_metric="train/step")
             wandb.define_metric("val/*", step_metric="train/step")
@@ -360,7 +371,9 @@ def train():
         # Checkpoint
         if args.save_interval > 0 and step % args.save_interval == 0 and is_master:
             ckpt_path = os.path.join(args.save_dir, f"{args.config}_{args.variant}_step{step}.pt")
-            save_checkpoint(model, optimizer, step, tokens_seen, args, cfg, ckpt_path)
+            wb_id = wandb.run.id if use_wandb else None
+            save_checkpoint(model, optimizer, step, tokens_seen, args, cfg, ckpt_path,
+                            wandb_run_id=wb_id)
             print(f"  Checkpoint saved: {ckpt_path}")
 
     # Final save
