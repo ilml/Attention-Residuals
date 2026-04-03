@@ -38,8 +38,8 @@ def parse_args():
     p.add_argument("--num_blocks", type=int, default=8)
     p.add_argument("--data_dir", type=str, default=None,
                    help="Override data directory")
-    p.add_argument("--wandb_project", type=str, default="attn-residuals")
-    p.add_argument("--wandb_entity", type=str, default=None)
+    p.add_argument("--wandb_project", type=str, default="attenres")
+    p.add_argument("--wandb_entity", type=str, default="tom-vita")
     p.add_argument("--max_steps", type=int, default=None)
     p.add_argument("--micro_batch", type=int, default=None)
     p.add_argument("--val_interval", type=int, default=200)
@@ -239,24 +239,45 @@ def train():
         rank=rank, world_size=world_size,
         num_workers=4, data_dir=args.data_dir)
 
-    # wandb
+    # wandb — enabled by default, set WANDB_MODE=offline to disable cloud sync
     use_wandb = False
     if is_master:
         run_name = f"{args.config}_{args.variant}"
         try:
             wandb.init(
-                project=args.wandb_project, entity=args.wandb_entity,
-                name=run_name, config={
-                    "model_config": args.config, "variant": args.variant,
-                    "d_model": cfg["d_model"], "n_layer": cfg["n_layer"],
-                    "lr": cfg["lr"], "global_batch_size": effective_batch,
-                    "max_steps": max_steps, "world_size": world_size,
+                project=args.wandb_project,
+                entity=args.wandb_entity,
+                name=run_name,
+                group=args.config,       # group runs by model size
+                tags=[args.variant, args.config,
+                      "large" if args.large else "small"],
+                config={
+                    "model_config": args.config,
+                    "variant": args.variant,
+                    "d_model": cfg["d_model"],
+                    "n_layer": cfg["n_layer"],
+                    "n_head": cfg["n_head"],
+                    "d_ff": cfg["d_ff"],
+                    "lr": cfg["lr"],
+                    "global_batch_size": effective_batch,
+                    "micro_batch": micro_batch,
+                    "grad_accum_steps": grad_accum_steps,
+                    "max_steps": max_steps,
+                    "warmup_steps": warmup_steps,
+                    "world_size": world_size,
                     "num_params": model.module.count_parameters(),
                     "large": args.large,
-                })
+                    "seq_len": SEQ_LEN,
+                    "num_blocks": args.num_blocks,
+                },
+            )
+            # Define metric sections for grouped panels
+            wandb.define_metric("train/*", step_metric="train/step")
+            wandb.define_metric("val/*", step_metric="train/step")
+            wandb.define_metric("perf/*", step_metric="train/step")
             use_wandb = True
         except Exception as e:
-            print(f"WARNING: wandb init failed ({e})")
+            print(f"WARNING: wandb init failed ({e}), continuing without wandb")
 
     # Training loop
     model.train()
@@ -310,10 +331,14 @@ def train():
 
             if is_master:
                 if use_wandb:
-                    wandb.log({"train/loss": avg_loss, "train/lr": lr,
-                               "train/tokens_seen": tokens_seen,
-                               "train/tokens_per_sec": tps,
-                               "train/pflops_days": pflops_days}, step=step)
+                    wandb.log({
+                        "train/step": step,
+                        "train/loss": avg_loss,
+                        "train/lr": lr,
+                        "train/tokens_seen": tokens_seen,
+                        "perf/tokens_per_sec": tps,
+                        "perf/pflops_days": pflops_days,
+                    }, step=step)
                 print(f"Step {step}/{max_steps} | loss {avg_loss:.4f} | lr {lr:.2e} | "
                       f"tok/s {tps:.0f} | PFLOP/s-days {pflops_days:.4f}")
             running_loss = 0.0
@@ -325,7 +350,11 @@ def train():
             pflops_days = 6 * raw_model.flops_per_token() * tokens_seen / (1e15 * 86400)
             if is_master:
                 if use_wandb:
-                    wandb.log({"val/loss": val_loss, "val/pflops_days": pflops_days}, step=step)
+                    wandb.log({
+                        "train/step": step,
+                        "val/loss": val_loss,
+                        "val/pflops_days": pflops_days,
+                    }, step=step)
                 print(f"  >> Val loss: {val_loss:.4f} at {pflops_days:.4f} PFLOP/s-days")
 
         # Checkpoint
