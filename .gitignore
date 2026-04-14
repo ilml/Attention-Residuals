@@ -3,6 +3,8 @@ __pycache__/
 .data_cache/
 checkpoints/
 checkpoints_test/
+checkpoints_paper/*step*.pt
+checkpoints_large/*step*.pt
 wandb/
 logs/
 scaling_law.png

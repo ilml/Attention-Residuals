@@ -28,7 +28,7 @@ def load_results(results_dir: str) -> dict:
 
 
 def make_plots(results: dict, output_path: str):
-    configs_order = ["124M", "172M", "231M", "313M", "401M"]
+    configs_order = ["124M", "172M", "194M", "231M", "241M", "296M", "313M", "401M", "436M", "528M"]
     variants_order = ["baseline", "full_attnres", "block_attnres"]
     variant_labels = {
         "baseline": "Baseline (PreNorm)",
