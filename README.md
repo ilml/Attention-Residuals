@@ -62,6 +62,20 @@ where $\alpha_{i \to l}$ are computed via a single learned pseudo-query $\mathbf
 
 **Left**: Validation loss for each model size. Lower is better. **Right**: Loss improvement of AttnRes over baseline. Positive = AttnRes wins.
 
+### Training Loss Curves
+
+<p align="center">
+  <img src="assets/train_loss_curves.png" width="900" />
+</p>
+
+### Validation Loss Curves
+
+<p align="center">
+  <img src="assets/val_loss_curves.png" width="900" />
+</p>
+
+Block AttnRes (green) consistently achieves the lowest loss across all model sizes.
+
 Trained on **150B tokens** from the [Nemotron Pretraining Dataset v1](https://huggingface.co/datasets/nvidia/Nemotron-Pre-Training-Dataset-v1) using up to 256 NVIDIA GB200 GPUs with the paper's exact token budgets (38.7B-119B per model size).
 
 | Config | Tokens | Baseline | Full AttnRes | Block AttnRes | Paper Baseline | Paper Best |
