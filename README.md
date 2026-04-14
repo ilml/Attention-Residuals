@@ -179,22 +179,18 @@ python prepare_data.py \
 
 ```bash
 # Single experiment (4 GPUs)
-export WANDB_MODE=offline
 torchrun --nproc_per_node=4 train.py \
-    --config 124M --variant block_attnres --large \
+    --config 194M --variant block_attnres --large \
     --data_dir /path/to/tokenized/data
 
-# Full sweep on Slurm (8 nodes, 32 GPUs)
-sbatch submit_large.sh
-
-# Or single-node sweep (4 GPUs, slower but more reliable)
-sbatch submit_missing.sh
+# Full paper reproduction on Slurm
+sbatch submit_paper.sh
 ```
 
 ### Step 3: Analyze
 
 ```bash
-python analyze.py --results_dir checkpoints_large --output scaling_law.png
+python analyze.py --results_dir checkpoints_paper --output scaling_law.png
 ```
 
 ### Arguments
@@ -218,16 +214,15 @@ python analyze.py --results_dir checkpoints_large --output scaling_law.png
 
 ```
 .
-├── model.py            # Transformer with 3 residual variants
-├── data.py             # Data loading (mmap binary + parquet fallback)
-├── train.py            # Multi-node DDP training with checkpointing
-├── configs.py          # Model configs (small + large scale)
-├── prepare_data.py     # Pre-tokenize parquets to binary mmap
-├── analyze.py          # Scaling plot generation
-├── run_scaling.sh      # Orchestrates all experiments
-├── submit_large.sh     # 8-node Slurm job
-├── submit_missing.sh   # Single-node fallback for failed experiments
-├── requirements.txt    # Python dependencies
+├── model.py              # Transformer with 3 residual variants
+├── data.py               # Data loading (mmap binary + parquet fallback)
+├── train.py              # Multi-node DDP training with checkpointing
+├── configs.py            # Model configs (5 sizes, paper-exact token budgets)
+├── prepare_data.py       # Pre-tokenize parquets to binary mmap
+├── extract_results.py    # Recover val loss from checkpoints
+├── analyze.py            # Scaling plot generation
+├── submit_paper.sh       # Slurm job for full paper reproduction
+├── requirements.txt      # Python dependencies
 └── Attention_Residuals.pdf  # Original paper
 ```
 
